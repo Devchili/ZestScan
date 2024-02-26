@@ -129,7 +129,6 @@ public abstract class CameraActivity extends AppCompatActivity
     deviceView = findViewById(R.id.device_list);
     deviceStrings.add("CPU");
     deviceStrings.add("GPU");
-    deviceStrings.add("NNAPI");
     deviceView.setChoiceMode(ListView.CHOICE_MODE_SINGLE);
     ArrayAdapter<String> deviceAdapter =
             new ArrayAdapter<>(

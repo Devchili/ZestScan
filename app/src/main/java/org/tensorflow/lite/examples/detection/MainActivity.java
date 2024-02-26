@@ -1,11 +1,17 @@
 package org.tensorflow.lite.examples.detection;
 
+import androidx.annotation.NonNull;
+import androidx.annotation.Nullable;
 import androidx.appcompat.app.AppCompatActivity;
+import androidx.core.app.ActivityCompat;
+import androidx.core.content.ContextCompat;
 
+import android.Manifest;
 import android.app.ActivityManager;
 import android.content.Context;
 import android.content.Intent;
 import android.content.pm.ConfigurationInfo;
+import android.content.pm.PackageManager;
 import android.graphics.Bitmap;
 import android.graphics.Canvas;
 import android.graphics.Color;
@@ -14,6 +20,7 @@ import android.graphics.Paint;
 import android.graphics.RectF;
 import android.os.Bundle;
 import android.os.Handler;
+import android.provider.MediaStore;
 import android.widget.Button;
 import android.widget.ImageView;
 import android.widget.Toast;
@@ -32,114 +39,132 @@ import java.util.List;
 
 public class MainActivity extends AppCompatActivity {
 
-    public static final float MINIMUM_CONFIDENCE_TF_OD_API = 0.3f;
+    public static final float MINIMUM_CONFIDENCE_TF_OD_API = 0.5f;
+    private static final int REQUEST_IMAGE_CAPTURE = 1;
+    private static final int PERMISSIONS_REQUEST = 1;
+    private static final String[] PERMISSIONS = {
+            Manifest.permission.CAMERA,
+            Manifest.permission.WRITE_EXTERNAL_STORAGE
+    };
+
+    private Button cameraButton, detectButton, takePictureButton;
+    private ImageView imageView;
+
+    private Classifier detector;
+    private Bitmap sourceBitmap;
+    private Bitmap cropBitmap;
+
+    private static final Logger LOGGER = new Logger();
+    public static final int TF_OD_API_INPUT_SIZE = 416;
+    private static final boolean TF_OD_API_IS_QUANTIZED = false;
+    private static final String TF_OD_API_MODEL_FILE = "citrusv2.tflite";
+    private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/coco.txt";
+    private static final boolean MAINTAIN_ASPECT = true;
+    private Integer sensorOrientation = 90;
+
+    private Matrix frameToCropTransform;
+    private Matrix cropToFrameTransform;
+    private MultiBoxTracker tracker;
+    private OverlayView trackingOverlay;
+    private int previewWidth = 0;
+    private int previewHeight = 0;
 
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
         setContentView(R.layout.activity_main);
 
-        cameraButton = findViewById(R.id.cameraButton);
+
         detectButton = findViewById(R.id.detectButton);
         imageView = findViewById(R.id.imageView);
+        takePictureButton = findViewById(R.id.takePictureButton);
 
-        cameraButton.setOnClickListener(v -> startActivity(new Intent(MainActivity.this, DetectorActivity.class)));
 
-        detectButton.setOnClickListener(v -> {
-            Handler handler = new Handler();
+        detectButton.setOnClickListener(v -> detectObjects());
+        takePictureButton.setOnClickListener(v -> dispatchTakePictureIntent());
 
-            new Thread(() -> {
-                final List<Classifier.Recognition> results = detector.recognizeImage(cropBitmap);
-                handler.post(new Runnable() {
-                    @Override
-                    public void run() {
-                        handleResult(cropBitmap, results);
-                    }
-                });
-            }).start();
-
-        });
-        this.sourceBitmap = Utils.getBitmapFromAsset(MainActivity.this, "kite.jpg");
-
-        this.cropBitmap = Utils.processBitmap(sourceBitmap, TF_OD_API_INPUT_SIZE);
-
-        this.imageView.setImageBitmap(cropBitmap);
+        if (!arePermissionsGranted()) {
+            ActivityCompat.requestPermissions(this, PERMISSIONS, PERMISSIONS_REQUEST);
+        }
 
         initBox();
-        ActivityManager activityManager = (ActivityManager) getSystemService(Context.ACTIVITY_SERVICE);
-        ConfigurationInfo configurationInfo = activityManager.getDeviceConfigurationInfo();
-
-        System.err.println(Double.parseDouble(configurationInfo.getGlEsVersion()));
-        System.err.println(configurationInfo.reqGlEsVersion >= 0x30000);
-        System.err.println(String.format("%X", configurationInfo.reqGlEsVersion));
     }
 
-    private static final Logger LOGGER = new Logger();
+    private void dispatchTakePictureIntent() {
+        Intent takePictureIntent = new Intent(MediaStore.ACTION_IMAGE_CAPTURE);
+        if (takePictureIntent.resolveActivity(getPackageManager()) != null) {
+            startActivityForResult(takePictureIntent, REQUEST_IMAGE_CAPTURE);
+        }
+    }
 
-    public static final int TF_OD_API_INPUT_SIZE = 640;
+    @Override
+    protected void onActivityResult(int requestCode, int resultCode, @Nullable Intent data) {
+        super.onActivityResult(requestCode, resultCode, data);
+        if (requestCode == REQUEST_IMAGE_CAPTURE && resultCode == RESULT_OK) {
+            Bundle extras = data.getExtras();
+            Bitmap imageBitmap = (Bitmap) extras.get("data");
+            imageView.setImageBitmap(imageBitmap);
+            processBitmap(imageBitmap);
+        }
+    }
 
-    private static final boolean TF_OD_API_IS_QUANTIZED = false;
+    private void detectObjects() {
+        if (cropBitmap == null) {
+            Toast.makeText(this, "No image to detect", Toast.LENGTH_SHORT).show();
+            return;
+        }
 
-    private static final String TF_OD_API_MODEL_FILE = "yolov5s.tflite";
+        Handler handler = new Handler();
+        new Thread(() -> {
+            final List<Classifier.Recognition> results = detector.recognizeImage(cropBitmap);
+            handler.post(() -> handleResult(cropBitmap, results));
+        }).start();
+    }
 
-    private static final String TF_OD_API_LABELS_FILE = "file:///android_asset/coco.txt";
-
-    // Minimum detection confidence to track a detection.
-    private static final boolean MAINTAIN_ASPECT = true;
-    private Integer sensorOrientation = 90;
-
-    private Classifier detector;
-
-    private Matrix frameToCropTransform;
-    private Matrix cropToFrameTransform;
-    private MultiBoxTracker tracker;
-    private OverlayView trackingOverlay;
-
-    protected int previewWidth = 0;
-    protected int previewHeight = 0;
-
-    private Bitmap sourceBitmap;
-    private Bitmap cropBitmap;
-
-    private Button cameraButton, detectButton;
-    private ImageView imageView;
+    private boolean arePermissionsGranted() {
+        for (String permission : PERMISSIONS) {
+            if (ContextCompat.checkSelfPermission(this, permission) != PackageManager.PERMISSION_GRANTED) {
+                return false;
+            }
+        }
+        return true;
+    }
 
     private void initBox() {
         previewHeight = TF_OD_API_INPUT_SIZE;
         previewWidth = TF_OD_API_INPUT_SIZE;
-        frameToCropTransform =
-                ImageUtils.getTransformationMatrix(
-                        previewWidth, previewHeight,
-                        TF_OD_API_INPUT_SIZE, TF_OD_API_INPUT_SIZE,
-                        sensorOrientation, MAINTAIN_ASPECT);
+        frameToCropTransform = ImageUtils.getTransformationMatrix(
+                previewWidth, previewHeight,
+                TF_OD_API_INPUT_SIZE, TF_OD_API_INPUT_SIZE,
+                sensorOrientation, MAINTAIN_ASPECT);
 
         cropToFrameTransform = new Matrix();
         frameToCropTransform.invert(cropToFrameTransform);
 
         tracker = new MultiBoxTracker(this);
         trackingOverlay = findViewById(R.id.tracking_overlay);
-        trackingOverlay.addCallback(
-                canvas -> tracker.draw(canvas));
+        trackingOverlay.addCallback(canvas -> tracker.draw(canvas));
 
         tracker.setFrameConfiguration(TF_OD_API_INPUT_SIZE, TF_OD_API_INPUT_SIZE, sensorOrientation);
 
         try {
-            detector =
-                    YoloV5Classifier.create(
-                            getAssets(),
-                            TF_OD_API_MODEL_FILE,
-                            TF_OD_API_LABELS_FILE,
-                            TF_OD_API_IS_QUANTIZED,
-                            TF_OD_API_INPUT_SIZE);
+            detector = YoloV5Classifier.create(
+                    getAssets(),
+                    TF_OD_API_MODEL_FILE,
+                    TF_OD_API_LABELS_FILE,
+                    TF_OD_API_IS_QUANTIZED,
+                    TF_OD_API_INPUT_SIZE);
         } catch (final IOException e) {
             e.printStackTrace();
             LOGGER.e(e, "Exception initializing classifier!");
-            Toast toast =
-                    Toast.makeText(
-                            getApplicationContext(), "Classifier could not be initialized", Toast.LENGTH_SHORT);
-            toast.show();
+            Toast.makeText(getApplicationContext(), "Classifier could not be initialized", Toast.LENGTH_SHORT).show();
             finish();
         }
+    }
+
+    private void processBitmap(Bitmap bitmap) {
+        sourceBitmap = bitmap;
+        cropBitmap = Utils.processBitmap(bitmap, TF_OD_API_INPUT_SIZE);
     }
 
     private void handleResult(Bitmap bitmap, List<Classifier.Recognition> results) {
@@ -149,21 +174,27 @@ public class MainActivity extends AppCompatActivity {
         paint.setStyle(Paint.Style.STROKE);
         paint.setStrokeWidth(2.0f);
 
-        final List<Classifier.Recognition> mappedRecognitions =
-                new LinkedList<Classifier.Recognition>();
+        final List<Classifier.Recognition> mappedRecognitions = new LinkedList<>();
 
         for (final Classifier.Recognition result : results) {
             final RectF location = result.getLocation();
             if (location != null && result.getConfidence() >= MINIMUM_CONFIDENCE_TF_OD_API) {
                 canvas.drawRect(location, paint);
-//                cropToFrameTransform.mapRect(location);
-//
-//                result.setLocation(location);
-//                mappedRecognitions.add(result);
+
+                // Draw label on top of the bounding box
+                final String label = result.getTitle() + " " + result.getConfidence();
+                final float textSize = Math.min(location.width(), location.height()) / 8.0f;
+                paint.setTextSize(textSize);
+
+                // Set wider text spacing
+                paint.setTextScaleX(3f); // Adjust the value as needed for wider spacing
+                paint.setColor(Color.BLACK);
+
+                final float baseline = location.top - 10.0f;
+                canvas.drawText(label, location.left, baseline, paint);
             }
         }
-//        tracker.trackResults(mappedRecognitions, new Random().nextInt());
-//        trackingOverlay.postInvalidate();
         imageView.setImageBitmap(bitmap);
     }
+
 }

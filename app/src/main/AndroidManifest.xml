@@ -30,20 +30,29 @@
         android:theme="@style/AppTheme.ObjectDetection"
         tools:ignore="HardcodedDebugMode">
         <activity
-            android:name=".SecondaryActivity"
+            android:name=".ResultActivity"
             android:exported="false" />
         <activity
-            android:name=".DetectorActivity"
-            android:exported="true"
-            android:label="@string/tfe_od_app_name"
-            tools:ignore="ExtraText">
-            android:screenOrientation="portrait">
+            android:name=".MainActivity"
+            android:exported="false" />
+        <activity
+            android:name=".SecondActivity"
+            android:exported="true">
+
+            <!-- Set SecondActivity as the launcher activity -->
             <intent-filter>
                 <action android:name="android.intent.action.MAIN" />
 
                 <category android:name="android.intent.category.LAUNCHER" />
             </intent-filter>
         </activity>
+        <activity
+            android:name=".DetectorActivity"
+            android:exported="true"
+            android:label="ZestScan"
+            tools:ignore="ExtraText"/>
+
+
     </application>
 
 </manifest>

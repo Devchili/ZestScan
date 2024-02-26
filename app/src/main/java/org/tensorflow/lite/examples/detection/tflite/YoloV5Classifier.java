@@ -224,7 +224,7 @@ public class YoloV5Classifier implements Classifier {
     //config yolo
     private int INPUT_SIZE = -1;
 
-//    private int[] OUTPUT_WIDTH;
+    //    private int[] OUTPUT_WIDTH;
 //    private int[][] MASKS;
 //    private int[] ANCHORS;
     private  int output_box;
